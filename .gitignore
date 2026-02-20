@@ -52,6 +52,8 @@ fit-dtb.blob
 /spl/
 /tpl/
 /defconfig
+# temporary build helpers and intermediate outputs
+tmp-mini/
 
 #
 # Generated include files

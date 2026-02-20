@@ -1,0 +1,59 @@
+name: RK SPI build & verify
+
+on:
+  push:
+    branches: [ '**' ]
+  pull_request:
+    branches: [ '**' ]
+
+jobs:
+  build-rkspi:
+    name: Build rkspi_loader.img and verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Install host packages
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          gcc-aarch64-linux-gnu dtc python3 python3-pip git-core build-essential libssl-dev
+
+    - name: Clone rkbin (vendor binaries)
+      run: |
+        git clone --depth 1 https://github.com/rockchip-linux/rkbin.git ../rkbin || true
+
+    - name: Build rkspi loader (full)
+      env:
+        CROSS_COMPILE: aarch64-linux-gnu-
+      run: |
+        set -eux
+        make orangepi_5_max_defconfig
+        make -j$(nproc) rkspi_loader.img
+
+    - name: Dump u-boot.itb (verify ATF present)
+      run: |
+        ./tools/dumpimage -l u-boot.itb | sed -n '1,120p'
+        ./tools/dumpimage -l u-boot.itb | grep -E 'atf-[0-9]+|ARM Trusted Firmware'
+
+    - name: Check rkspi size == 4MiB
+      run: |
+        if [ ! -f rkspi_loader_full.img ]; then
+          echo "rkspi_loader_full.img not found"; exit 1
+        fi
+        sz=$(stat -c%s rkspi_loader_full.img)
+        echo "rkspi size=${sz} bytes"
+        if [ "$sz" -ne 4194304 ]; then
+          echo "ERROR: unexpected rkspi size ($sz != 4194304)"; exit 1
+        fi
+
+    - name: Upload rkspi artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: rkspi_loader_full.img
+        path: rkspi_loader_full.img
