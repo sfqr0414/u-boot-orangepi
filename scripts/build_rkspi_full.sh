@@ -105,7 +105,7 @@ fi
 
 if [ -x ./make.sh ]; then
   echo "[3/8] Attempt: pack u-boot.itb via ./make.sh itb"
-  if CROSS_COMPILE=${CROSS_COMPILE:-aarch64-linux-gnu-} ./make.sh itb 2>/dev/null; then
+  if ./make.sh CROSS_COMPILE=${CROSS_COMPILE:-aarch64-linux-gnu-} itb 2>/dev/null; then
     if [ -f "${UBOOT_ITB}" ]; then
       echo "-> got ${UBOOT_ITB} from make.sh"
     fi
