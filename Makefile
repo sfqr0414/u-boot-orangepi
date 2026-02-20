@@ -1081,8 +1081,7 @@ rkspi_loader.img: FORCE
 	@echo "[mk] creating RK SPI loader image via scripts/build_rkspi_full.sh (4MB)"
 	# Always run the build script which performs defconfig + build + packaging.
 	@./scripts/build_rkspi_full.sh || ( echo "ERROR: scripts/build_rkspi_full.sh failed" >&2; false );
-	@echo "[mk] rkspi image available: rkspi_loader_full.img (copied to $@)"
-	cp -f rkspi_loader_full.img $@
+	@echo "[mk] rkspi image available: rkspi_loader.img"
 	@printf "done\n"
 
 u-boot-spl.kwb: u-boot.img spl/u-boot-spl.bin FORCE

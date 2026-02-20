@@ -1,11 +1,11 @@
 #!/bin/bash
-# build_rkspi_full.sh - build full RK SPI loader image (tpl + spl + u-boot.itb)
-# Produces rkspi_loader_full.img (4MB, padded) for RK3588 OrangePi_5_Max
+# build_rkspi_full.sh - build RK SPI loader image (tpl + spl + u-boot.itb)
+# Produces rkspi_loader.img (4MB, padded) for RK3588 OrangePi_5_Max
 # Usage: ./build_rkspi_full.sh [defconfig]
 
 set -euo pipefail
 BOARD_DEFCONFIG=${1:-orangepi_5_max_defconfig}
-OUT_IMG=${2:-rkspi_loader_full.img}
+OUT_IMG=${2:-rkspi_loader.img}
 TMP_INI=tmp-mini/mini_loader.ini
 
 # Optional: allow overriding SPL_FIT_IMAGE_KB for the FIT flow
@@ -74,6 +74,7 @@ fi
 make -j${JOBS}
 
 # 2) Ensure SPL/TPL exist
+echo "[2/8] Ensure SPL/TPL exist"
 if [ ! -f "${SPL_INPUT}" ]; then
   echo "ERROR: SPL not found: ${SPL_INPUT}" >&2
   exit 1
@@ -103,7 +104,7 @@ if [ -d ../rkbin ]; then
 fi
 
 if [ -x ./make.sh ]; then
-  echo "[2/8] Attempt: pack u-boot.itb via ./make.sh itb"
+  echo "[3/8] Attempt: pack u-boot.itb via ./make.sh itb"
   if CROSS_COMPILE=${CROSS_COMPILE:-aarch64-linux-gnu-} ./make.sh itb 2>/dev/null; then
     if [ -f "${UBOOT_ITB}" ]; then
       echo "-> got ${UBOOT_ITB} from make.sh"
@@ -114,7 +115,7 @@ if [ -x ./make.sh ]; then
 fi
 
 if [ ! -f "${UBOOT_ITB}" ]; then
-  echo "[2b/8] Fallback: build u-boot.itb via SPL_FIT_GENERATOR"
+  echo "[3b/8] Fallback: build u-boot.itb via SPL_FIT_GENERATOR"
   # generate u-boot.its then mkimage
   srctree=. ./arch/arm/mach-rockchip/make_fit_atf.sh > u-boot.its || true
   if [ -f u-boot.its ]; then
@@ -184,7 +185,7 @@ INI
 fi
 
 # 5) Run boot_merger to produce merged loader (rkloader_full.bin)
-echo "[3/8] Generating loader via scripts/fit.sh (uses INI from ../rkbin when available)"
+echo "[5/8] Generating loader via scripts/fit.sh (uses INI from ../rkbin when available)"
 if [ -d ../rkbin ] && [ -f ../rkbin/RKBOOT/RK3588MINIALL.ini ]; then
   INI_LOADER="../rkbin/RKBOOT/RK3588MINIALL.ini"
   echo "INFO: using INI loader ${INI_LOADER}"
@@ -225,7 +226,7 @@ else
 fi
 
 if [ ${FALLBACK} -eq 1 ]; then
-  echo "[3b/8] Fallback: try boot_merger CLI mode (avoid INI parser)"
+  echo "[5b/8] Fallback: try boot_merger CLI mode (avoid INI parser)"
   # Try CLI mode (-d / -b) up to 3 times in case of transient crash
   TRIES=0
   SUCCESS=0
@@ -236,7 +237,7 @@ if [ ${FALLBACK} -eq 1 ]; then
   done
 
   if [ ${SUCCESS} -eq 0 ] || [ ! -s "${MERGED_BIN}" ]; then
-    echo "[3c/8] Final fallback: create ${MERGED_BIN} by simple concatenation"
+    echo "[5c/8] Final fallback: create ${MERGED_BIN} by simple concatenation"
     # Prefer rkbin FlashData/FlashBoot when available, otherwise use local TPL/SPL
     if [ -d ../rkbin ] && [ -f ../rkbin/RKBOOT/RK3588MINIALL.ini ]; then
       # extract FlashData/FlashBoot paths from RK3588MINIALL.ini
@@ -275,7 +276,7 @@ fi
 fi
 
 # 6) Wrap merged loader into RK SPI image
-echo "[4/8] Converting ${MERGED_BIN} -> rkspi image"
+echo "[6/8] Converting ${MERGED_BIN} -> rkspi image"
 # Try the straightforward invocation first; if it fails (tool bugs or size checks),
 # attempt a safe two-file invocation using SPL as the "init" file and the rest as
 # the "boot" file (created in a temp file).
@@ -307,13 +308,13 @@ if [ ${CUR_SIZE} -gt ${TARGET_SIZE} ]; then
 fi
 PAD_BYTES=$((TARGET_SIZE - CUR_SIZE))
 if [ ${PAD_BYTES} -gt 0 ]; then
-  echo "[5/8] Padding ${OUT_IMG}.tmp with ${PAD_BYTES} bytes (0xFF) to reach 4MB"
+  echo "[7/8] Padding ${OUT_IMG}.tmp with ${PAD_BYTES} bytes (0xFF) to reach 4MB"
   dd if=/dev/zero bs=1 count=${PAD_BYTES} 2>/dev/null | tr '\000' '\377' >> ${OUT_IMG}.tmp
 fi
 mv ${OUT_IMG}.tmp ${OUT_IMG}
 
 # 8) Report
-echo "[6/8] Output: ${OUT_IMG}"
+echo "[8/8] Output: ${OUT_IMG}"
 ls -lh ${OUT_IMG}
 sha256sum ${OUT_IMG}
 
