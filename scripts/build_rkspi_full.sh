@@ -319,15 +319,41 @@ fi
 # Remove any previous temporary output to avoid mkimage appending errors
 rm -f "${OUT_IMG}.tmp"
 echo "[6/8] Converting ${MERGED_BIN} -> rkspi image"
-# Try the straightforward invocation first; if it fails (tool bugs or size checks),
-# attempt a safe two-file invocation using SPL as the "init" file and the rest as
-# the "boot" file (created in a temp file).
-MKIMG_LOG=$(mktemp -u tmp-mini/mkimage.XXXX.log)
-if tools/mkimage -T rkspi -n rk3588 -d ${MERGED_BIN} ${OUT_IMG}.tmp 2>"${MKIMG_LOG}"; then
-  echo "INFO: tools/mkimage succeeded using ${MERGED_BIN}"
+
+# Pre‑check: if the merged binary is evidently too big to serve as the init/SPL
+# portion we should skip the single‑file invocation and go straight to the
+# SPL-first method.  This prevents mkimage from complaining about a "SPL image
+# too large" when we have concatenated TPL+SPL+u-boot.itb (which usually exceeds
+# the 0xff000 limit).
+SPL_MAX_SIZE=$((0xff000))
+USE_SPL_FIRST=0
+if [ -n "${CUSTOM_BIN:-}" ]; then
+  USE_SPL_FIRST=1
 else
-  echo "WARN: tools/mkimage failed with ${MERGED_BIN}, trying SPL-first fallback (see ${MKIMG_LOG})"
-  cat "${MKIMG_LOG}" >&2 || true
+  if [ -f "${MERGED_BIN}" ]; then
+    SZ=$(stat -c%s "${MERGED_BIN}")
+    if [ ${SZ} -gt ${SPL_MAX_SIZE} ]; then
+      echo "INFO: ${MERGED_BIN} is ${SZ} bytes (>$((SPL_MAX_SIZE))) – skipping naive mkimage"
+      USE_SPL_FIRST=1
+    fi
+  fi
+fi
+
+MKIMG_LOG=$(mktemp -u tmp-mini/mkimage.XXXX.log)
+
+if [ ${USE_SPL_FIRST} -eq 0 ]; then
+  # Try the straightforward invocation first; if it fails (tool bugs or size checks),
+  # fall back to the safe two-file method below.
+  if tools/mkimage -T rkspi -n rk3588 -d ${MERGED_BIN} ${OUT_IMG}.tmp 2>"${MKIMG_LOG}"; then
+    echo "INFO: tools/mkimage succeeded using ${MERGED_BIN}"
+  else
+    echo "WARN: tools/mkimage failed with ${MERGED_BIN}, trying SPL-first fallback (see ${MKIMG_LOG})"
+    cat "${MKIMG_LOG}" >&2 || true
+    USE_SPL_FIRST=1
+  fi
+fi
+
+if [ ${USE_SPL_FIRST} -eq 1 ]; then
   # Fallback: mkimage can accept two files (init: SPL, boot: uboot.img) which
   # avoids treating the entire merged binary as the SPL.  uboot.img is produced by
   # boot_merger and contains the FIT payload (with ATF/OP-TEE/U-Boot).  Using
