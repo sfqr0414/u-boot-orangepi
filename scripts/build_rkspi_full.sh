@@ -187,9 +187,9 @@ fi
 # 5) Run boot_merger to produce merged loader (rkloader_full.bin)
 echo "[5/8] Generating loader via scripts/fit.sh (use modified ${TMP_INI} so local u-boot.itb is injected)"
 # Always prefer the TMP_INI we prepared above (it mirrors ../rkbin INI but
-# has our injected `uboot=./u-boot.itb`). This ensures the local u-boot.itb
-# (with ATF when present) ends up inside the final loader payload.
-INI_LOADER="${TMP_INI}"
+# has our injected `uboot=./u-boot.itb`). Use an absolute pathname so
+# downstream scripts can still open it even if they change directory.
+INI_LOADER="$(pwd)/${TMP_INI}"
 echo "INFO: using INI loader ${INI_LOADER}"
 
 # Make sure make.sh can find the toolchain (make.sh reads .cc)
