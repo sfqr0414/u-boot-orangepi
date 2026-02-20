@@ -145,11 +145,19 @@ if [ -d ../rkbin ] && [ -f ../rkbin/RKBOOT/RK3588MINIALL.ini ]; then
   fi
   sed -i "s/^NUM=[0-9]\+/NUM=3/" ${TMP_INI}
 
-  # Inject uboot entry (replace if exists)
+  # Inject uboot entry (replace if exists).  Place it immediately
+  # after the FlashBoot path so that boot_merger sees the loader entry
+  # before any other sections such as [OUTPUT].
   if grep -q '^uboot=' ${TMP_INI}; then
     sed -i "s|^uboot=.*$|uboot=./u-boot.itb|" ${TMP_INI}
   else
-    printf "uboot=./u-boot.itb\n" >> ${TMP_INI}
+    # insert after FlashBoot line if present, otherwise append in section
+    if grep -q '^FlashBoot=' ${TMP_INI}; then
+      sed -i '/^FlashBoot=/a uboot=./u-boot.itb' ${TMP_INI}
+    else
+      # fallback to end of file
+      printf "uboot=./u-boot.itb\n" >> ${TMP_INI}
+    fi
   fi
 
   # Ensure output path points to rkloader_full.bin (boot_merger expects this)
