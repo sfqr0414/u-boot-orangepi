@@ -93,7 +93,14 @@ function gen_kfdt_node()
 
 function gen_bl31_node()
 {
-	${srctree}/arch/arm/mach-rockchip/decode_bl31.py
+	# decode BL31 segments (prefer python2, fall back to python3)
+	if command -v python2 >/dev/null 2>&1 ; then
+		${srctree}/arch/arm/mach-rockchip/decode_bl31.py
+	elif command -v python3 >/dev/null 2>&1 ; then
+		python3 ${srctree}/arch/arm/mach-rockchip/decode_bl31.py
+	else
+		echo "WARN: python not found (python2/python3) — skipping BL31 decode"
+	fi
 
 	NUM=1
 	for ATF in `ls -l bl31_0x*.bin | sort --key=5 -nr | awk '{ print $9 }'`

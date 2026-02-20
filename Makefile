@@ -1049,8 +1049,41 @@ u-boot-dtb.img u-boot.img u-boot.kwb u-boot.pbl u-boot-ivt.img: \
 		$(if $(CONFIG_SPL_LOAD_FIT),u-boot-nodtb.bin dts/dt.dtb,u-boot.bin) FORCE
 	$(call if_changed,mkimage)
 
-u-boot.itb: u-boot-nodtb.bin dts/dt.dtb $(U_BOOT_ITS) FORCE
+u-boot.itb: u-boot-nodtb.bin dts/dt.dtb u-boot.dtb bl31.elf $(U_BOOT_ITS) FORCE
 	$(call if_changed,mkfitimage)
+
+# If rkbin contains BL31 for this platform, copy it locally and decode
+# program segments so the FIT generator can include ATF images.
+bl31.elf:
+	@if [ -f ../rkbin/bin/rk35/rk3588_bl31_*.elf ]; then \
+		cp -f ../rkbin/bin/rk35/rk3588_bl31_*.elf $@ 2>/dev/null || true; \
+	fi; \
+	@if [ -f $@ ]; then \
+		if command -v python3 >/dev/null 2>&1; then \
+			python3 arch/arm/mach-rockchip/decode_bl31.py || true; \
+		else \
+			echo "WARN: python3 not found — BL31 segments won't be decoded"; \
+		fi; \
+	else \
+		touch $@; \
+		echo "INFO: no BL31 available in ../rkbin — continuing without ATF"; \
+	fi
+
+# Full Rockchip SPI loader image (TPL + SPL + u-boot.itb) — auto-generated and
+# padded to 4MB. Built by `make` when building U-Boot for Rockchip boards.
+ALL-y += rkspi_loader.img
+
+rkloader_full.bin: tpl/u-boot-tpl.bin spl/u-boot-spl.bin u-boot.itb FORCE
+	@echo "[mk] assembling rkloader_full.bin (TPL+SPL+u-boot-itb)"
+	cat tpl/u-boot-tpl.bin spl/u-boot-spl.bin u-boot.itb > $@
+
+rkspi_loader.img: FORCE
+	@echo "[mk] creating RK SPI loader image via scripts/build_rkspi_full.sh (4MB)"
+	# Always run the build script which performs defconfig + build + packaging.
+	@./scripts/build_rkspi_full.sh || ( echo "ERROR: scripts/build_rkspi_full.sh failed" >&2; false );
+	@echo "[mk] rkspi image available: rkspi_loader_full.img (copied to $@)"
+	cp -f rkspi_loader_full.img $@
+	@printf "done\n"
 
 u-boot-spl.kwb: u-boot.img spl/u-boot-spl.bin FORCE
 	$(call if_changed,mkimage)
