@@ -57,6 +57,20 @@ export CROSS_COMPILE=aarch64-linux-gnu-
 echo "[1/8] make ${BOARD_DEFCONFIG} && make -j${JOBS}"
 make ${BOARD_DEFCONFIG}
 
+# Ensure SPI offset macro matches the 512KB boundary we use when packing.
+# If the defconfig leaves it at the default (1MB) or something else, adjust
+# it here so SPL and our dd/seek locations stay in agreement.
+if grep -q '^CONFIG_SYS_SPI_U_BOOT_OFFS=' .config; then
+  cur=$(grep '^CONFIG_SYS_SPI_U_BOOT_OFFS=' .config | cut -d= -f2)
+  if [ "${cur}" != "0x80000" ]; then
+    echo "INFO: overriding CONFIG_SYS_SPI_U_BOOT_OFFS=${cur} -> 0x80000"
+    sed -i 's/^CONFIG_SYS_SPI_U_BOOT_OFFS=.*/CONFIG_SYS_SPI_U_BOOT_OFFS=0x80000/' .config
+  fi
+else
+  echo "INFO: setting CONFIG_SYS_SPI_U_BOOT_OFFS=0x80000"
+  echo 'CONFIG_SYS_SPI_U_BOOT_OFFS=0x80000' >> .config
+fi
+
 # If requested, temporarily set CONFIG_SPL_FIT_IMAGE_KB in .config so
 # the FIT flow (scripts/fit-core.sh) will create the ITB/IMG at that size.
 # We keep a backup and restore it at the end of the script.
