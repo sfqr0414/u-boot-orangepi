@@ -63,28 +63,31 @@ jobs:
         name: make-build-log
         path: build-make.log
 
-    - name: Dump u-boot.itb (verify ATF present)
+    - name: Inspect uboot.img / rkspi_loader.img (verify ATF present)
       run: |
-        # Only try to inspect u-boot.itb if it exists; don't fail the job if absent
-        if [ -f u-boot.itb ]; then
-          ./tools/dumpimage -l u-boot.itb | sed -n '1,120p'
-          ./tools/dumpimage -l u-boot.itb | grep -E 'atf-[0-9]+|ARM Trusted Firmware'
-        else
-          echo "u-boot.itb not found, skipping ATF verification"
+        # boot_merger produces uboot.img containing the FIT; it may be trimmed
+        # when the build script runs, so check that first.  as a fallback (and
+        # final confirmation) dump from rkspi_loader.img if available.
+        if [ -f uboot.img ]; then
+          echo "-- uboot.img --"
+          ./tools/dumpimage -l uboot.img | sed -n '1,120p'
+          ./tools/dumpimage -l uboot.img | grep -E 'atf-[0-9]+|ARM Trusted Firmware' || true
+        fi
+        if [ -f rkspi_loader.img ]; then
+          echo "-- rkspi_loader.img --"
+          ./tools/dumpimage -l rkspi_loader.img | sed -n '1,120p'
+          ./tools/dumpimage -l rkspi_loader.img | grep -E 'atf-[0-9]+|ARM Trusted Firmware' || true
         fi
 
-    - name: Check rkspi size (>= 4MiB)
+    - name: Check rkspi size == 4MiB
       run: |
         if [ ! -f rkspi_loader.img ]; then
           echo "rkspi_loader.img not found"; exit 1
         fi
         sz=$(stat -c%s rkspi_loader.img)
         echo "rkspi size=${sz} bytes"
-        if [ "$sz" -lt 4194304 ]; then
-          echo "ERROR: rkspi image too small ($sz < 4194304)"; exit 1
-        fi
-        if [ "$sz" -gt 4194304 ]; then
-          echo "WARNING: rkspi image larger than 4MiB; this is expected when FIT/ATF are included"
+        if [ "$sz" -ne 4194304 ]; then
+          echo "ERROR: unexpected rkspi size ($sz != 4194304)"; exit 1
         fi
 
     - name: Upload rkspi artifact
