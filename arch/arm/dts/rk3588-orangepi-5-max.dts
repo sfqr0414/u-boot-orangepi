@@ -166,6 +166,12 @@
 	vpcie3v3-supply = <&vcc3v3_pcie30>;
 	reset-gpios = <&gpio4 RK_PB6 GPIO_ACTIVE_HIGH>;
 	status = "okay";
+
+	/* Reset is the PCIe controller's `reset-gpios`; power is provided
+	 * by the regulator referenced in `vpcie3v3-supply` (dynamically
+	 * looked up by board code). The separate `nvme-reset` node was
+	 * removed to avoid duplicate GPIO ownership/conflicts.
+	 */
 };
 
 &pcie30phy {

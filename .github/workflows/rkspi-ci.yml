@@ -1,0 +1,91 @@
+name: RK SPI build & verify
+
+on:
+  push:
+    branches: [ '**' ]
+  pull_request:
+    branches: [ '**' ]
+
+jobs:
+  build-rkspi:
+    name: Build rkspi_loader.img and verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Install host packages
+      run: |
+        set -euxo pipefail
+        # capture apt output to logs so we can upload them even on failure
+        sudo apt-get update 2>&1 | tee apt-update.log
+        sudo apt-get install -y --no-install-recommends \
+          crossbuild-essential-arm64 gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+          device-tree-compiler python3 python3-pip git build-essential libssl-dev 2>&1 | tee install-packages.log || true
+        # verify cross-compiler is available — fail fast and print apt log for diagnosis
+        if ! command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
+          echo "ERROR: aarch64 cross-compiler not found; showing install-packages.log"
+          sed -n '1,200p' install-packages.log || true
+          exit 1
+        fi
+        aarch64-linux-gnu-gcc --version
+
+    - name: Upload apt logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: apt-install-logs
+        path: |
+          apt-update.log
+          install-packages.log
+
+    - name: Clone rkbin (vendor binaries)
+      run: |
+        git clone --depth 1 https://github.com/rockchip-linux/rkbin.git ../rkbin || true
+
+    - name: Build rkspi loader (full)
+      env:
+        CROSS_COMPILE: aarch64-linux-gnu-
+      run: |
+        set -euxo pipefail
+        export CROSS_COMPILE=aarch64-linux-gnu-
+        # Run build and capture full make output so we can upload logs on failure
+        make -j$(nproc) rkspi_loader.img 2>&1 | tee build-make.log
+
+    - name: Upload build make log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: make-build-log
+        path: build-make.log
+
+    - name: Dump u-boot.itb (verify ATF present)
+      run: |
+        # Only try to inspect u-boot.itb if it exists; don't fail the job if absent
+        if [ -f u-boot.itb ]; then
+          ./tools/dumpimage -l u-boot.itb | sed -n '1,120p'
+          ./tools/dumpimage -l u-boot.itb | grep -E 'atf-[0-9]+|ARM Trusted Firmware'
+        else
+          echo "u-boot.itb not found, skipping ATF verification"
+        fi
+
+    - name: Check rkspi size == 4MiB
+      run: |
+        if [ ! -f rkspi_loader.img ]; then
+          echo "rkspi_loader.img not found"; exit 1
+        fi
+        sz=$(stat -c%s rkspi_loader.img)
+        echo "rkspi size=${sz} bytes"
+        if [ "$sz" -ne 4194304 ]; then
+          echo "ERROR: unexpected rkspi size ($sz != 4194304)"; exit 1
+        fi
+
+    - name: Upload rkspi artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: rkspi_loader.img
+        path: rkspi_loader.img
