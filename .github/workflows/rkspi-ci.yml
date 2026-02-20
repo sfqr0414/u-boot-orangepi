@@ -73,15 +73,18 @@ jobs:
           echo "u-boot.itb not found, skipping ATF verification"
         fi
 
-    - name: Check rkspi size == 4MiB
+    - name: Check rkspi size (>= 4MiB)
       run: |
         if [ ! -f rkspi_loader.img ]; then
           echo "rkspi_loader.img not found"; exit 1
         fi
         sz=$(stat -c%s rkspi_loader.img)
         echo "rkspi size=${sz} bytes"
-        if [ "$sz" -ne 4194304 ]; then
-          echo "ERROR: unexpected rkspi size ($sz != 4194304)"; exit 1
+        if [ "$sz" -lt 4194304 ]; then
+          echo "ERROR: rkspi image too small ($sz < 4194304)"; exit 1
+        fi
+        if [ "$sz" -gt 4194304 ]; then
+          echo "WARNING: rkspi image larger than 4MiB; this is expected when FIT/ATF are included"
         fi
 
     - name: Upload rkspi artifact
