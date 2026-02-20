@@ -218,6 +218,27 @@ if [ -z "${MERGED_BIN}" ]; then
 fi
 
 echo "INFO: loader produced: ${MERGED_BIN}"
+# boot_merger also writes out uboot.img containing the FIT payload.  it
+# frequently pads this file to exactly 4 MiB, which forces the subsequent
+# mkimage invocation to reserve a full 4 MiB of boot data and pushes the
+# final RK-SPI image above the 4 MiB limit.  trim any trailing 0x00/0xFF
+# padding now so mkimage sees only the real FIT data.
+if [ -f "uboot.img" ]; then
+  echo "INFO: trimming padding from uboot.img"
+  python3 - <<'PY'
+import sys
+fname='uboot.img'
+b=open(fname,'rb').read()
+i=len(b)
+# drop trailing 0x00 or 0xFF bytes
+while i>0 and b[i-1] in (0x00,0xFF):
+    i-=1
+if i != len(b):
+    with open(fname,'rb+') as f: f.truncate(i)
+    print('INFO: uboot.img shrunk to', i, 'bytes')
+PY
+fi
+
 # the FIT payload (u-boot.itb) might not be part of ${MERGED_BIN} generated
 # by fit.sh.  if we have a local u-boot.itb, assemble a custom merged
 # binary that concatenates TPL + SPL + u-boot.itb so the FIT image is
@@ -295,6 +316,8 @@ fi
 fi
 
 # 6) Wrap merged loader into RK SPI image
+# Remove any previous temporary output to avoid mkimage appending errors
+rm -f "${OUT_IMG}.tmp"
 echo "[6/8] Converting ${MERGED_BIN} -> rkspi image"
 # Try the straightforward invocation first; if it fails (tool bugs or size checks),
 # attempt a safe two-file invocation using SPL as the "init" file and the rest as
@@ -324,6 +347,27 @@ else
   fi
 fi
 rm -f "${MKIMG_LOG}" || true
+
+# mkimage sometimes produces an oversized file by appending the boot section
+# twice when using the two-file fallback.  trim back to the stated init+boot
+# length if necessary so subsequent padding works correctly.  guard the whole
+# sequence so a failure here doesn't abort the build.
+if [ -f "${OUT_IMG}.tmp" ]; then
+  MKINFO=$(tools/mkimage -l "${OUT_IMG}.tmp" 2>/dev/null |
+    awk '/Init Data Size/ {i=$4} /Boot Data Size/ {b=$4} END {printf "%d %d", i, b}' || true)
+  if [ -n "${MKINFO}" ]; then
+    INIT_SIZE=$(echo "${MKINFO}" | cut -d' ' -f1)
+    BOOT_SIZE=$(echo "${MKINFO}" | cut -d' ' -f2)
+    if [ -n "${INIT_SIZE}" ] && [ -n "${BOOT_SIZE}" ]; then
+      DESIRED=$((INIT_SIZE + BOOT_SIZE))
+      CUR=$(stat -c%s "${OUT_IMG}.tmp")
+      if [ ${CUR} -gt ${DESIRED} ]; then
+        echo "INFO: trimming ${OUT_IMG}.tmp from ${CUR} to ${DESIRED} bytes"
+        truncate -s ${DESIRED} "${OUT_IMG}.tmp"
+      fi
+    fi
+  fi
+fi
 
 # 7) Pad to 4MB (0xFF fill) to match Rockchip SPI loader size
 TARGET_SIZE=$((4096 * 1024))
