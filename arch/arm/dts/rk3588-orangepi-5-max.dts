@@ -167,13 +167,11 @@
 	reset-gpios = <&gpio4 RK_PB6 GPIO_ACTIVE_HIGH>;
 	status = "okay";
 
-	/* NVMe / M.2 physical reset node: power + reset GPIOs */
-	nvme-reset {
-		compatible = "gpio-nvme-reset";
-		pwr-gpios = <&gpio2 RK_PB6 GPIO_ACTIVE_HIGH>; /* GPIO 78 */
-		rst-gpios = <&gpio4 RK_PB6 GPIO_ACTIVE_HIGH>; /* GPIO 142 */
-		status = "okay";
-	};
+	/* Reset is the PCIe controller's `reset-gpios`; power is provided
+	 * by the regulator referenced in `vpcie3v3-supply` (dynamically
+	 * looked up by board code). The separate `nvme-reset` node was
+	 * removed to avoid duplicate GPIO ownership/conflicts.
+	 */
 };
 
 &pcie30phy {

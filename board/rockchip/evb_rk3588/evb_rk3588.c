@@ -9,6 +9,7 @@
 #include <usb.h>
 #include <dm/ofnode.h>
 #include <dm.h>
+#include <power/regulator.h>
 #include <sysreset.h>
 #include <errno.h>
 #include <asm/gpio.h>
@@ -43,39 +44,58 @@ int board_usb_init(int index, enum usb_init_type init)
  * rk_board_init: implement NVMe physical reset sequence for M.2 slot
  * Sequence (required):
  *  - assert reset low 300 ms (discharge)
- *  - assert power
+ *  - enable power (via regulator 'vcc3v3_pcie30' only)
  *  - delay 100 ms
  *  - deassert reset
  *  - delay 1000 ms (controller ready)
+ *
+ * Power MUST be managed by the regulator driver (`vcc3v3_pcie30`).
+ * Board code will NOT attempt to control regulator-owned GPIOs.
  */
 int rk_board_init(void)
 {
 	ofnode node;
-	struct gpio_desc nvme_pwr = {0}, nvme_rst = {0};
+	struct gpio_desc nvme_rst = {0};
+	struct udevice *vreg = NULL;
 	int ret;
 
-	node = ofnode_path("/pcie3x4/nvme-reset");
+	node = ofnode_path("/pcie3x4");
 	if (!ofnode_valid(node))
-		return 0; /* no NVMe reset node — nothing to do */
+		return 0;
 
-	ret = gpio_request_by_name_nodev(node, "pwr-gpios", 0,
-					 &nvme_pwr, GPIOD_IS_OUT);
+	/* Request PCIe reset GPIO (use the controller's reset-gpios) */
+	ret = gpio_request_by_name_nodev(node, "reset-gpios", 0,
+		 &nvme_rst, GPIOD_IS_OUT);
 	if (ret)
-		debug("nvme: cannot request pwr-gpios (%d)\n", ret);
-
-	ret = gpio_request_by_name_nodev(node, "rst-gpios", 0,
-					 &nvme_rst, GPIOD_IS_OUT);
-	if (ret)
-		debug("nvme: cannot request rst-gpios (%d)\n", ret);
+		debug("nvme: cannot request pcie reset-gpios (%d)\n", ret);
 
 	/* Hold reset low to discharge */
 	if (dm_gpio_is_valid(&nvme_rst))
 		dm_gpio_set_value(&nvme_rst, 0);
 	mdelay(300);
 
-	/* Power on */
-	if (dm_gpio_is_valid(&nvme_pwr))
-		dm_gpio_set_value(&nvme_pwr, 1);
+	/* Power on: obtain regulator from pcie node's 'vpcie3v3-supply' */
+	{
+		struct ofnode_phandle_args args;
+
+		ret = ofnode_parse_phandle_with_args(node, "vpcie3v3-supply",
+				 NULL, 0, 0, &args);
+		if (!ret) {
+			ret = uclass_get_device_by_ofnode(UCLASS_REGULATOR,
+				 args.node, &vreg);
+			if (!ret) {
+				ret = regulator_set_enable(vreg, true);
+				if (ret)
+					debug("nvme: regulator enable failed (%d)\n", ret);
+			} else {
+				debug("nvme: vpcie3v3-supply present but regulator device not found\n");
+			}
+		} else {
+			debug("nvme: pcie node has no vpcie3v3-supply property\n");
+		}
+	}
+
+	/* allow power to settle before deasserting reset */
 	mdelay(100);
 
 	/* Release reset and wait for controller ready */
