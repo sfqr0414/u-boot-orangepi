@@ -320,6 +320,18 @@ fi
 rm -f "${OUT_IMG}.tmp"
 echo "[6/8] Converting ${MERGED_BIN} -> rkspi image"
 
+# Ensure the RKNS header will be located at block 64 (0x8000).
+# Rockchip SPI images are expected to have a 32‑KiB gap before the
+# header; mkimage always writes the header at the start of the input
+# file, so prepend zeroes here if we haven't already.
+PAD_INPUT="${MERGED_BIN}.pad32k"
+if [ ! -f "${PAD_INPUT}" ]; then
+    echo "INFO: creating 32KiB-padded copy of ${MERGED_BIN}"
+    (dd if=/dev/zero bs=512 count=64 2>/dev/null; cat "${MERGED_BIN}") > "${PAD_INPUT}"
+fi
+# point the mkimage command at the padded file going forward
+MERGED_BIN="${PAD_INPUT}"
+
 # Pre‑check: if the merged binary is evidently too big to serve as the init/SPL
 # portion we should skip the single‑file invocation and go straight to the
 # SPL-first method.  This prevents mkimage from complaining about a "SPL image
@@ -393,6 +405,30 @@ if [ -f "${OUT_IMG}.tmp" ]; then
       fi
     fi
   fi
+fi
+
+# after mkimage we may still have the header at byte 0; the boot ROM
+# only looks at 0x8000, so insert the 32 KiB prefix if necessary.
+if [ -f "${OUT_IMG}.tmp" ]; then
+    # check whether RKNS resides at 0x8000 already
+    if ! dd if="${OUT_IMG}.tmp" bs=1 skip=$((64*512)) count=4 2>/dev/null | grep -q RKNS; then
+        echo "INFO: inserting 32KiB prefix in ${OUT_IMG}.tmp so RKNS is at 0x8000"
+        mv "${OUT_IMG}.tmp" "${OUT_IMG}.tmp.orig"
+        (dd if=/dev/zero bs=512 count=64 2>/dev/null; cat "${OUT_IMG}.tmp.orig") > "${OUT_IMG}.tmp"
+        rm -f "${OUT_IMG}.tmp.orig"
+    fi
+
+    # ensure the FIT payload starts at 0x80000; if it doesn’t, slide it forward
+    PAYLOAD_OFF=$(grep -aob $'\xd0\x0d\xfe\xed' "${OUT_IMG}.tmp" | head -n1 | cut -d: -f1 || true)
+    if [ -n "${PAYLOAD_OFF}" ] && [ ${PAYLOAD_OFF} -lt $((0x80000)) ]; then
+        DELTA=$((0x80000 - PAYLOAD_OFF))
+        echo "INFO: shifting payload by ${DELTA} bytes to reach 0x80000"
+        # insert zeros before the payload offset
+        head -c ${PAYLOAD_OFF} "${OUT_IMG}.tmp" > tmp.pre
+        dd if=/dev/zero bs=1 count=${DELTA} 2>/dev/null >> tmp.pre
+        tail -c +$((PAYLOAD_OFF+1)) "${OUT_IMG}.tmp" >> tmp.pre
+        mv tmp.pre "${OUT_IMG}.tmp"
+    fi
 fi
 
 # 7) Pad to 4MB (0xFF fill) to match Rockchip SPI loader size
