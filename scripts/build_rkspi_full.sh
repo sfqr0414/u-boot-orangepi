@@ -320,18 +320,9 @@ fi
 rm -f "${OUT_IMG}.tmp"
 echo "[6/8] Converting ${MERGED_BIN} -> rkspi image"
 
-# Ensure the RKNS header will be located at block 64 (0x8000).
-# Rockchip SPI images are expected to have a 32‑KiB gap before the
-# header; mkimage always writes the header at the start of the input
-# file, so prepend zeroes here if we haven't already.
-PAD_INPUT="${MERGED_BIN}.pad32k"
-if [ ! -f "${PAD_INPUT}" ]; then
-    echo "INFO: creating 32KiB-padded copy of ${MERGED_BIN}"
-    (dd if=/dev/zero bs=512 count=64 2>/dev/null; cat "${MERGED_BIN}") > "${PAD_INPUT}"
-fi
-# point the mkimage command at the padded file going forward
-MERGED_BIN="${PAD_INPUT}"
-
+# mkimage will write the RKNS header at the beginning of its output.
+# we'll duplicate that header to offset 0x8000 below, so there's no need
+# to pad the input beforehand.
 # Pre‑check: if the merged binary is evidently too big to serve as the init/SPL
 # portion we should skip the single‑file invocation and go straight to the
 # SPL-first method.  This prevents mkimage from complaining about a "SPL image
@@ -408,14 +399,15 @@ if [ -f "${OUT_IMG}.tmp" ]; then
 fi
 
 # after mkimage we may still have the header at byte 0; the boot ROM
-# only looks at 0x8000, so insert the 32 KiB prefix if necessary.
+# only looks at 0x8000, so duplicate the header there rather than moving it.
 if [ -f "${OUT_IMG}.tmp" ]; then
-    # check whether RKNS resides at 0x8000 already
+    # header magic check at offset 0x8000
     if ! dd if="${OUT_IMG}.tmp" bs=1 skip=$((64*512)) count=4 2>/dev/null | grep -q RKNS; then
-        echo "INFO: inserting 32KiB prefix in ${OUT_IMG}.tmp so RKNS is at 0x8000"
-        mv "${OUT_IMG}.tmp" "${OUT_IMG}.tmp.orig"
-        (dd if=/dev/zero bs=512 count=64 2>/dev/null; cat "${OUT_IMG}.tmp.orig") > "${OUT_IMG}.tmp"
-        rm -f "${OUT_IMG}.tmp.orig"
+        echo "INFO: copying RKNS header to offset 0x8000"
+        # assume header fits in one 512‑byte block
+        dd if="${OUT_IMG}.tmp" bs=512 count=1 of=tmp.hdr
+        dd if=tmp.hdr of="${OUT_IMG}.tmp" bs=512 seek=64 conv=notrunc
+        rm -f tmp.hdr
     fi
 
     # ensure the FIT payload starts at 0x80000; if it doesn’t, slide it forward
