@@ -4,6 +4,104 @@
 # Usage: ./build_rkspi_full.sh [defconfig]
 
 set -euo pipefail
+# support special modes before normal build
+#   --make-test <sectors> [<real-bytes>]
+#       create a minimal rkspi file containing the given number of 2KiB init
+#       sectors, optionally copying <real-bytes> from the official loader as
+#       non‑zero prefix.  Useful for exercising ROM checks without a full
+#       U-Boot build.
+#   --make-hybrid <offset> [<custom-file>]
+#       start with the vendor rkspi_loader.img header+init (up to <offset>)
+#       then append the contents of <custom-file> (defaults to OUT_IMG).
+if [ "${1:-}" = "--make-test" ]; then
+    SECTORS=${2:-109}
+    REALBYTES=${3:-0}
+    TMP=test.img
+    echo "[test] generating ${SECTORS} init sectors (real ${REALBYTES} bytes)"
+    truncate -s $((SECTORS * 2048)) tmp.bin
+    if [ ${REALBYTES} -gt 0 ]; then
+        dd if=compare/rkspi_loader.img of=tmp.bin bs=1 skip=$((0x8080)) count=${REALBYTES} seek=$((0x8080)) conv=notrunc
+    fi
+    tools/mkimage -T rkspi -n rk3588 -d tmp.bin ${TMP}
+    # patch size field and duplicate
+    INIT_SIZE=$(tools/mkimage -l ${TMP} 2>/dev/null | awk '/Init Data Size/ {print $4}')
+    SECS=$((INIT_SIZE / 2048))
+    VAL=$(( (SECS << 16) | 4 ))
+    HEX=$(printf '%02x%02x%02x%02x' $((VAL&0xff)) $(((VAL>>8)&0xff)) $(((VAL>>16)&0xff)) $(((VAL>>24)&0xff)))
+    printf '%s' "${HEX}" | xxd -r -p | dd of=${TMP} bs=1 seek=0x78 conv=notrunc
+    dd if=${TMP} bs=1 skip=0x78 count=4 of=${TMP} bs=1 seek=0x8078 conv=notrunc
+    echo "generated ${TMP}"
+    exit 0
+fi
+if [ "${1:-}" = "--make-hybrid" ]; then
+    OFF=${2:-258048}   # default 0x3f000 (vendor header + boot prefix boundary)
+    CUSTOM=${3:-${OUT_IMG}}
+    echo "[hybrid] using vendor file up to ${OFF}, appending ${CUSTOM}"
+    cp compare/rkspi_loader.img hybrid.img
+    truncate -s ${OFF} hybrid.img
+    # copy contents of custom file starting at offset ${OFF}
+    # copy from CUSTOM starting at input offset and place into hybrid.img at the same offset
+    dd if=${CUSTOM} of=hybrid.img bs=1 skip=${OFF} seek=${OFF} conv=notrunc
+
+    # After merging we need to fix the RKNS header so that the
+    # size fields and SHA256 hashes reflect the new payload.  This
+    # mostly mirrors the logic used later in the normal build flow.
+    if command -v tools/mkimage >/dev/null 2>&1; then
+        MKINFO=$(tools/mkimage -l hybrid.img 2>/dev/null |
+            awk '/Init Data Size/ {i=$4} /Boot Data Size/ {b=$4} END {printf "%d %d", i, b}' || true)
+        if [ -n "${MKINFO}" ]; then
+            INIT_SIZE=$(echo "${MKINFO}" | cut -d' ' -f1)
+            BOOT_SIZE=$(echo "${MKINFO}" | cut -d' ' -f2)
+            if [ -n "${INIT_SIZE}" ] && [ -n "${BOOT_SIZE}" ]; then
+                echo "[hybrid] patching size fields and recalculating hashes"
+                # patch the RKNS init-size field at offset 0x78
+                SECTORS=$((INIT_SIZE / 2048))
+                OFFF=4
+                VAL=$(( (SECTORS << 16) | OFFF ))
+                HEX=$(printf '%02x%02x%02x%02x' \
+                      $((VAL & 0xff)) $(((VAL >> 8) & 0xff)) \
+                      $(((VAL >> 16) & 0xff)) $(((VAL >> 24) & 0xff)))
+                printf '%s' "${HEX}" | xxd -r -p | \
+                    dd of=hybrid.img bs=1 seek=$((0x78)) conv=notrunc 2>/dev/null
+
+                # use Python snippet to recalc both image hashes and header hash
+                python3 - "hybrid.img" "${INIT_SIZE}" "${BOOT_SIZE}" <<'PY'
+import sys,hashlib
+fn=sys.argv[1]; init=int(sys.argv[2]); boot=int(sys.argv[3])
+blk=512
+# header0_info_v2 layout constants (same as later in script)
+hdr_off_images=4+4+4+4+104
+entry_size=88
+hash_offset_in_entry=4+4+4+4+8
+header_hash_offset=1536
+with open(fn,'r+b') as f:
+    # compute image0 hash
+    f.seek(4*blk)
+    data=f.read(init)
+    h0=hashlib.sha256(data).digest()
+    f.seek(hdr_off_images + hash_offset_in_entry)
+    f.write(h0)
+    # image1 hash
+    f.seek(4*blk + init)
+    data=f.read(boot)
+    h1=hashlib.sha256(data).digest()
+    f.seek(hdr_off_images + entry_size + hash_offset_in_entry)
+    f.write(h1)
+    # header0 hash
+    f.seek(0)
+    prefix=f.read(header_hash_offset)
+    hh=hashlib.sha256(prefix).digest()
+    f.seek(header_hash_offset)
+    f.write(hh)
+PY
+            fi
+        fi
+    fi
+
+    echo "created hybrid.img"
+    exit 0
+fi
+
 BOARD_DEFCONFIG=${1:-orangepi_5_max_defconfig}
 OUT_IMG=${2:-rkspi_loader.img}
 TMP_INI=tmp-mini/mini_loader.ini
@@ -395,19 +493,49 @@ if [ -f "${OUT_IMG}.tmp" ]; then
         truncate -s ${DESIRED} "${OUT_IMG}.tmp"
       fi
     fi
+
+    # fix rkspi header size field if mkimage inflated it for SPI alignment
+    # mkimage writes (sectors<<16)|offset, but sectors may include the
+    # 4x padding introduced by rkspi_vrec_header; the ROM expects the
+    # *actual* init size in 2KiB sectors.  mkimage -l hides this
+    # discrepancy by dividing the value, so we replicate the correct
+    # count here and patch the raw header bytes before we duplicate it.
+    if [ -n "${INIT_SIZE}" ]; then
+      # number of 2KiB sectors in the init data
+      SECTORS=$((INIT_SIZE / 2048))
+      # offset field is always 4
+      OFF=4
+      VAL=$(( (SECTORS << 16) | OFF ))
+      # write in little-endian order to offset 0x78
+      # build a 4-byte hex string and convert it to raw bytes with xxd
+      HEX=$(printf '%02x%02x%02x%02x' \
+            $((VAL & 0xff)) $(((VAL >> 8) & 0xff)) \
+            $(((VAL >> 16) & 0xff)) $(((VAL >> 24) & 0xff)))
+      printf '%s' "${HEX}" | xxd -r -p | \
+        dd of="${OUT_IMG}.tmp" bs=1 seek=$((0x78)) conv=notrunc 2>/dev/null
+      echo "INFO: patched RKNS size field to ${SECTORS} sectors (0x$(printf '%x' ${VAL}))"
+    fi
   fi
 fi
 
 # after mkimage we may still have the header at byte 0; the boot ROM
 # only looks at 0x8000, so duplicate the header there rather than moving it.
 if [ -f "${OUT_IMG}.tmp" ]; then
-    # header magic check at offset 0x8000
-    if ! dd if="${OUT_IMG}.tmp" bs=1 skip=$((64*512)) count=4 2>/dev/null | grep -q RKNS; then
-        echo "INFO: copying RKNS header to offset 0x8000"
-        # assume header fits in one 512‑byte block
-        dd if="${OUT_IMG}.tmp" bs=512 count=1 of=tmp.hdr
-        dd if=tmp.hdr of="${OUT_IMG}.tmp" bs=512 seek=64 conv=notrunc
-        rm -f tmp.hdr
+    # some BootROM variants ignore init_offset and simply fetch SPL at
+    # 0x8000+0x600=0x8600.  compute where the first non-zero byte of the
+    # payload currently resides and, if it’s before 0x600, pad accordingly.
+    SPL_OFF=$(grep -aob '[^\x00]' "${OUT_IMG}.tmp" | awk -F: '$1 >= 512 {print $1; exit}' || true)
+    if [ -n "${SPL_OFF}" ] && [ ${SPL_OFF} -lt $((0x600)) ]; then
+        DELTA=$((0x600 - SPL_OFF))
+        echo "INFO: inserting ${DELTA} bytes padding before SPL (was at ${SPL_OFF})"
+        head -c ${SPL_OFF} "${OUT_IMG}.tmp" > tmp.pre
+        dd if=/dev/zero bs=1 count=${DELTA} 2>/dev/null >> tmp.pre
+        tail -c +$((SPL_OFF+1)) "${OUT_IMG}.tmp" >> tmp.pre
+        mv tmp.pre "${OUT_IMG}.tmp"
+        SPL_OFF=$((SPL_OFF + DELTA))
+    fi
+    if [ -n "${SPL_OFF}" ]; then
+        echo "INFO: SPL entry now at offset 0x$(printf '%x' ${SPL_OFF})"
     fi
 
     # ensure the FIT payload starts at 0x80000; if it doesn’t, slide it forward
@@ -420,6 +548,52 @@ if [ -f "${OUT_IMG}.tmp" ]; then
         dd if=/dev/zero bs=1 count=${DELTA} 2>/dev/null >> tmp.pre
         tail -c +$((PAYLOAD_OFF+1)) "${OUT_IMG}.tmp" >> tmp.pre
         mv tmp.pre "${OUT_IMG}.tmp"
+    fi
+
+    # recalc RKNS hashes in case we padded/shifted payloads
+    INIT_SIZE=$(tools/mkimage -l "${OUT_IMG}.tmp" 2>/dev/null |
+      awk '/Init Data Size/ {print $4}') || INIT_SIZE=0
+    BOOT_SIZE=$(tools/mkimage -l "${OUT_IMG}.tmp" 2>/dev/null |
+      awk '/Boot Data Size/ {print $4}') || BOOT_SIZE=0
+    if [ -n "${INIT_SIZE}" ] && [ -n "${BOOT_SIZE}" ]; then
+        echo "INFO: recalculating SHA256 hashes (init ${INIT_SIZE}, boot ${BOOT_SIZE})"
+        python3 - "${OUT_IMG}.tmp" "${INIT_SIZE}" "${BOOT_SIZE}" <<'PY'
+import sys,hashlib
+fn=sys.argv[1]; init=int(sys.argv[2]); boot=int(sys.argv[3])
+blk=512
+# header0_info_v2 layout constants
+hdr_off_images=4+4+4+4+104
+entry_size=88
+hash_offset_in_entry=4+4+4+4+8
+header_hash_offset=1536
+with open(fn,'r+b') as f:
+    # compute image0 hash
+    f.seek(4*blk)
+    data=f.read(init)
+    h0=hashlib.sha256(data).digest()
+    f.seek(hdr_off_images + hash_offset_in_entry)
+    f.write(h0)
+    # image1 hash
+    f.seek(4*blk + init)
+    data=f.read(boot)
+    h1=hashlib.sha256(data).digest()
+    f.seek(hdr_off_images + entry_size + hash_offset_in_entry)
+    f.write(h1)
+    # header0 hash
+    f.seek(0)
+    prefix=f.read(header_hash_offset)
+    hh=hashlib.sha256(prefix).digest()
+    f.seek(header_hash_offset)
+    f.write(hh)
+PY
+    fi
+
+    # finally, copy corrected header to 0x8000 after all adjustments
+    if ! dd if="${OUT_IMG}.tmp" bs=1 skip=$((64*512)) count=4 2>/dev/null | grep -q RKNS; then
+        echo "INFO: copying RKNS header to offset 0x8000"
+        dd if="${OUT_IMG}.tmp" bs=512 count=1 of=tmp.hdr
+        dd if=tmp.hdr of="${OUT_IMG}.tmp" bs=512 seek=64 conv=notrunc
+        rm -f tmp.hdr
     fi
 fi
 
