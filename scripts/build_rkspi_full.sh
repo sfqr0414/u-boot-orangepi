@@ -7,8 +7,14 @@
 set -euo pipefail
 
 DEFCONFIG=${1:-orangepi_5_max_defconfig}
+# MODE can be "all" (default), "payload" to build only the signed‑prefix
+# test image, or "minimal" to suppress auxiliary outputs.  This keeps the
+# workspace clean when you only need the working loader.
+MODE=${2:-all}
+
 OUT_FULL=custom_loader.img
 OUT_TEST=test.img
+OUT_PAYLOAD=payload_only.img
 
 export ARCH=arm64
 export CROSS_COMPILE=aarch64-linux-gnu-
@@ -61,62 +67,70 @@ with open(f,'r+b') as g:
 PY
 }
 
-# 4. make full loader image
-# if merged payload is too large for single-file mkimage, use SPL-first fallback
-SPL_MAX=$((0xff000))
-if [ -f merged.bin ]; then
-    SZ=$(stat -c%s merged.bin)
-else
-    SZ=0
-fi
-if [ ${SZ} -gt ${SPL_MAX} ]; then
-    echo "[build] merged.bin is ${SZ} bytes (>${SPL_MAX}), using SPL-first mkimage"
-    # u-boot.img should already exist from fit/make.sh
-    if [ ! -f u-boot.img ]; then
-        echo "ERROR: u-boot.img missing, cannot use SPL-first" >&2
-        exit 1
+# 4. make full loader image (skip when only payload requested)
+if [ "$MODE" != "payload" ]; then
+    # if merged payload is too large for single-file mkimage, use SPL-first fallback
+    SPL_MAX=$((0xff000))
+    if [ -f merged.bin ]; then
+        SZ=$(stat -c%s merged.bin)
+    else
+        SZ=0
     fi
-    tools/mkimage -T rkspi -n rk3588 -d "spl/u-boot-spl.bin:u-boot.img" ${OUT_FULL}.tmp
-else
-    tools/mkimage -T rkspi -n rk3588 -d merged.bin ${OUT_FULL}.tmp
-fi
-INIT_SIZE=$(tools/mkimage -l ${OUT_FULL}.tmp 2>/dev/null | awk '/Init Data Size/ {print $4}')
-SECS=$((INIT_SIZE / 2048))
-VAL=$(( (SECS << 16) | 4 ))
-HEX=$(printf '%02x%02x%02x%02x' $((VAL&0xff)) $(((VAL>>8)&0xff)) $(((VAL>>16)&0xff)) $(((VAL>>24)&0xff)))
-printf '%s' "${HEX}" | xxd -r -p | dd of=${OUT_FULL}.tmp bs=1 seek=0x78 conv=notrunc
-dd if=${OUT_FULL}.tmp bs=1 skip=0x78 count=4 of=${OUT_FULL}.tmp bs=1 seek=0x8078 conv=notrunc
-pad_and_sign ${OUT_FULL}.tmp
-mv ${OUT_FULL}.tmp ${OUT_FULL}
-echo "built ${OUT_FULL} size=$(stat -c%s ${OUT_FULL})"
-
-# 4b. also produce a payload-only image that keeps the original 3.6MB prefix
-#     and simply places the new U-Boot at offset 4MB.  BootROM will accept this
-#     image because the signed region is untouched.
-OUT_PAYLOAD=payload_only.img
-cp ${OUT_FULL} ${OUT_PAYLOAD}
-# make sure payload fits without touching trailer (trailer sits just before 4MB)
-if [ -f u-boot-dtb.img ]; then
-    dd if=u-boot-dtb.img of=${OUT_PAYLOAD} bs=1 seek=$((4*1024*1024)) conv=notrunc
-    echo "built ${OUT_PAYLOAD} size=$(stat -c%s ${OUT_PAYLOAD})"
-else
-    echo "warning: u-boot-dtb.img not found; skipping ${OUT_PAYLOAD} generation"
+    if [ ${SZ} -gt ${SPL_MAX} ]; then
+        echo "[build] merged.bin is ${SZ} bytes (>${SPL_MAX}), using SPL-first mkimage"
+        # u-boot.img should already exist from fit/make.sh
+        if [ ! -f u-boot.img ]; then
+            echo "ERROR: u-boot.img missing, cannot use SPL-first" >&2
+            exit 1
+        fi
+        tools/mkimage -T rkspi -n rk3588 -d "spl/u-boot-spl.bin:u-boot.img" ${OUT_FULL}.tmp
+    else
+        tools/mkimage -T rkspi -n rk3588 -d merged.bin ${OUT_FULL}.tmp
+    fi
+    INIT_SIZE=$(tools/mkimage -l ${OUT_FULL}.tmp 2>/dev/null | awk '/Init Data Size/ {print $4}')
+    SECS=$((INIT_SIZE / 2048))
+    VAL=$(( (SECS << 16) | 4 ))
+    HEX=$(printf '%02x%02x%02x%02x' $((VAL&0xff)) $(((VAL>>8)&0xff)) $(((VAL>>16)&0xff)) $(((VAL>>24)&0xff)))
+    printf '%s' "${HEX}" | xxd -r -p | dd of=${OUT_FULL}.tmp bs=1 seek=0x78 conv=notrunc
+    dd if=${OUT_FULL}.tmp bs=1 skip=0x78 count=4 of=${OUT_FULL}.tmp bs=1 seek=0x8078 conv=notrunc
+    pad_and_sign ${OUT_FULL}.tmp
+    mv ${OUT_FULL}.tmp ${OUT_FULL}
+    echo "built ${OUT_FULL} size=$(stat -c%s ${OUT_FULL})"
 fi
 
-# 5. create test image from prefix
-SECTORS=109
-dbg_prefix_bytes=$((SECTORS*2048))
-truncate -s $((SECTORS*2048)) tmp.bin
-dd if=${OUT_FULL} of=tmp.bin bs=1 count=${dbg_prefix_bytes} conv=notrunc
+# 4b. always produce payload-only image unless minimal mode
+if [ "$MODE" != "minimal" ]; then
+    echo "generating ${OUT_PAYLOAD} with signed prefix"
+    if [ -f ${OUT_FULL} ]; then
+        cp ${OUT_FULL} ${OUT_PAYLOAD}
+    else
+        # try a stock loader if the custom one wasn't built
+        cp rkspi_loader.img ${OUT_PAYLOAD} 2>/dev/null || true
+    fi
+    if [ -f u-boot-dtb.img ]; then
+        dd if=u-boot-dtb.img of=${OUT_PAYLOAD} bs=1 seek=$((4*1024*1024)) conv=notrunc
+        echo "built ${OUT_PAYLOAD} size=$(stat -c%s ${OUT_PAYLOAD})"
+    else
+        echo "warning: u-boot-dtb.img not found; skipping ${OUT_PAYLOAD} generation"
+    fi
+fi
 
-tools/mkimage -T rkspi -n rk3588 -d tmp.bin ${OUT_TEST}.tmp
-INIT_SIZE=$(tools/mkimage -l ${OUT_TEST}.tmp 2>/dev/null | awk '/Init Data Size/ {print $4}')
-SECS=$((INIT_SIZE / 2048))
-VAL=$(( (SECS << 16) | 4 ))
-HEX=$(printf '%02x%02x%02x%02x' $((VAL&0xff)) $(((VAL>>8)&0xff)) $(((VAL>>16)&0xff)) $(((VAL>>24)&0xff)))
-printf '%s' "${HEX}" | xxd -r -p | dd of=${OUT_TEST}.tmp bs=1 seek=0x78 conv=notrunc
-dd if=${OUT_TEST}.tmp bs=1 skip=0x78 count=4 of=${OUT_TEST}.tmp bs=1 seek=0x8078 conv=notrunc
-pad_and_sign ${OUT_TEST}.tmp
-mv ${OUT_TEST}.tmp ${OUT_TEST}
-echo "built ${OUT_TEST} size=$(stat -c%s ${OUT_TEST})"
+# 5. create test image from prefix (only in all mode)
+if [ "$MODE" = "all" ]; then
+    SECTORS=109
+    dbg_prefix_bytes=$((SECTORS*2048))
+    truncate -s $((SECTORS*2048)) tmp.bin
+    dd if=${OUT_FULL} of=tmp.bin bs=1 count=${dbg_prefix_bytes} conv=notrunc
+
+    tools/mkimage -T rkspi -n rk3588 -d tmp.bin ${OUT_TEST}.tmp
+    INIT_SIZE=$(tools/mkimage -l ${OUT_TEST}.tmp 2>/dev/null | awk '/Init Data Size/ {print $4}')
+    SECS=$((INIT_SIZE / 2048))
+    VAL=$(( (SECS << 16) | 4 ))
+    HEX=$(printf '%02x%02x%02x%02x' $((VAL&0xff)) $(((VAL>>8)&0xff)) $(((VAL>>16)&0xff)) $(((VAL>>24)&0xff)))
+    printf '%s' "${HEX}" | xxd -r -p | dd of=${OUT_TEST}.tmp bs=1 seek=0x78 conv=notrunc
+    dd if=${OUT_TEST}.tmp bs=1 skip=0x78 count=4 of=${OUT_TEST}.tmp bs=1 seek=0x8078 conv=notrunc
+    pad_and_sign ${OUT_TEST}.tmp
+    mv ${OUT_TEST}.tmp ${OUT_TEST}
+    echo "built ${OUT_TEST} size=$(stat -c%s ${OUT_TEST})"
+fi
 
