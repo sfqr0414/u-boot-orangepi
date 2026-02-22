@@ -13,6 +13,12 @@ DEFCONFIG=${1:-orangepi_5_max_defconfig}
 # The variable may be overridden by the caller.
 MODE=${2:-payload}
 
+# OUT_PAYLOAD is the name of the image this script generates.  Previous
+# versions used "payload_only.img", but the Makefile/CI expect
+# `rkspi_loader.img` so that's now the default.  callers can override via
+# the environment if they need the old name for testing.
+OUT_PAYLOAD=${OUT_PAYLOAD:-rkspi_loader.img}
+
 # The first 0x384000 bytes of a genuine RK3588 loader, base64-encoded.
 # We hardcode rather than keep an external file in the repo; this string was
 # generated once from an official `rkspi_loader.img` and will never change.

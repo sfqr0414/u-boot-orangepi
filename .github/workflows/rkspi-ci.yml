@@ -79,15 +79,18 @@ jobs:
           ./tools/dumpimage -l rkspi_loader.img | grep -E 'atf-[0-9]+|ARM Trusted Firmware' || true
         fi
 
-    - name: Check rkspi size == 4MiB
+    - name: Check rkspi size meets minimum
       run: |
         if [ ! -f rkspi_loader.img ]; then
           echo "rkspi_loader.img not found"; exit 1
         fi
         sz=$(stat -c%s rkspi_loader.img)
         echo "rkspi size=${sz} bytes"
-        if [ "$sz" -ne 4194304 ]; then
-          echo "ERROR: unexpected rkspi size ($sz != 4194304)"; exit 1
+        # the image must be at least 4 MiB to include the signed prefix; builds
+        # now append the payload and typically exceed this.  anything smaller
+        # is a clear error.  (optional: set an upper limit if you prefer.)
+        if [ "$sz" -lt 4194304 ]; then
+          echo "ERROR: unexpected rkspi size ($sz < 4194304)"; exit 1
         fi
 
     - name: Upload rkspi artifact
