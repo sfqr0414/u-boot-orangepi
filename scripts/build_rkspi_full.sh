@@ -8,10 +8,10 @@ set -euo pipefail
 
 DEFCONFIG=${1:-orangepi_5_max_defconfig}
 # MODE can be "all" (build everything), "payload" to produce just the
-# validated payload‑only image (default under make), or "minimal" to
-# suppress even that and only run the U-Boot build without producing any
-# extra files.  The variable may be overridden by the caller.
-MODE=${2:-minimal}
+# validated payload‑only image (default), or "minimal" to suppress even
+# that and only run the U-Boot build without producing any extra files.
+# The variable may be overridden by the caller.
+MODE=${2:-payload}
 
 OUT_FULL=custom_loader.img
 OUT_TEST=test.img
