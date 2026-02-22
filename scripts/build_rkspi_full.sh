@@ -90,6 +90,19 @@ pad_and_sign ${OUT_FULL}.tmp
 mv ${OUT_FULL}.tmp ${OUT_FULL}
 echo "built ${OUT_FULL} size=$(stat -c%s ${OUT_FULL})"
 
+# 4b. also produce a payload-only image that keeps the original 3.6MB prefix
+#     and simply places the new U-Boot at offset 4MB.  BootROM will accept this
+#     image because the signed region is untouched.
+OUT_PAYLOAD=payload_only.img
+cp ${OUT_FULL} ${OUT_PAYLOAD}
+# make sure payload fits without touching trailer (trailer sits just before 4MB)
+if [ -f u-boot-dtb.img ]; then
+    dd if=u-boot-dtb.img of=${OUT_PAYLOAD} bs=1 seek=$((4*1024*1024)) conv=notrunc
+    echo "built ${OUT_PAYLOAD} size=$(stat -c%s ${OUT_PAYLOAD})"
+else
+    echo "warning: u-boot-dtb.img not found; skipping ${OUT_PAYLOAD} generation"
+fi
+
 # 5. create test image from prefix
 SECTORS=109
 dbg_prefix_bytes=$((SECTORS*2048))
