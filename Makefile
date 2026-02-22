@@ -1077,10 +1077,16 @@ rkloader_full.bin: tpl/u-boot-tpl.bin spl/u-boot-spl.bin u-boot.itb FORCE
 	@echo "[mk] assembling rkloader_full.bin (TPL+SPL+u-boot-itb)"
 	cat tpl/u-boot-tpl.bin spl/u-boot-spl.bin u-boot.itb > $@
 
+# mode passed through to build_rkspi_full.sh; payload generates only the
+# signed-prefix image we care about.  Users may override on the make command
+# line, e.g. `make MODE=all rkspi_loader.img` to recreate all helpers.
+MODE ?= payload
+
 rkspi_loader.img: FORCE
 	@echo "[mk] creating RK SPI loader image via scripts/build_rkspi_full.sh (4MB)"
 	# Always run the build script which performs defconfig + build + packaging.
-	@./scripts/build_rkspi_full.sh || ( echo "ERROR: scripts/build_rkspi_full.sh failed" >&2; false );
+	@./scripts/build_rkspi_full.sh $(if $(DEFCONFIG),$(DEFCONFIG),orangepi_5_max_defconfig) $(MODE) || \
+	    ( echo "ERROR: scripts/build_rkspi_full.sh failed" >&2; false );
 	@echo "[mk] rkspi image available: rkspi_loader.img"
 	@printf "done\n"
 
