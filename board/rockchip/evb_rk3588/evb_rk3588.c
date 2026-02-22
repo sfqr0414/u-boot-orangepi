@@ -49,6 +49,7 @@ int board_usb_init(int index, enum usb_init_type init)
 int rk_board_init(void)
 {
 	/* no custom initialization */
+	return 0;
 }
 
 /* Use sysreset UCLASS to perform a cold reset via the sysreset driver */
