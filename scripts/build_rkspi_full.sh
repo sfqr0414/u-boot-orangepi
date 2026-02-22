@@ -13,6 +13,20 @@ DEFCONFIG=${1:-orangepi_5_max_defconfig}
 # The variable may be overridden by the caller.
 MODE=${2:-payload}
 
+# Base64-encoded first 0x384000 bytes of the official rkspi_loader.img.
+# Generated from an official image; maintained here so we needn't keep the
+# original file in the repository.  This blob decompresses to the exact
+# prefix that BootROM will accept.
+PREFIX_B64='$(cat /tmp/prefix.b64)'
+
+write_prefix() {
+    local out="$1"
+    echo "writing built-in prefix to $out"
+    base64 -d <<'EOF' > "$out"
+$PREFIX_B64
+EOF
+}
+
 OUT_FULL=custom_loader.img
 OUT_TEST=test.img
 OUT_PAYLOAD=payload_only.img
