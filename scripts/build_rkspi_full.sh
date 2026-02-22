@@ -7,10 +7,11 @@
 set -euo pipefail
 
 DEFCONFIG=${1:-orangepi_5_max_defconfig}
-# MODE can be "all" (default), "payload" to build only the signed‑prefix
-# test image, or "minimal" to suppress auxiliary outputs.  This keeps the
-# workspace clean when you only need the working loader.
-MODE=${2:-all}
+# MODE can be "all" (build everything), "payload" to produce just the
+# validated payload‑only image (default under make), or "minimal" to
+# suppress even that and only run the U-Boot build without producing any
+# extra files.  The variable may be overridden by the caller.
+MODE=${2:-minimal}
 
 OUT_FULL=custom_loader.img
 OUT_TEST=test.img
