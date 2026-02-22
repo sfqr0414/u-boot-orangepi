@@ -115,23 +115,9 @@ fi
 
 # 4b. always produce payload-only image unless minimal mode
 if [ "$MODE" != "minimal" ]; then
-    echo "generating ${OUT_PAYLOAD} with signed prefix"
-    # Prefer an existing official loader; check both root and compare/
-    # in case make was invoked from the top level (the stock file is kept in
-    # the compare directory during our experiments).
-    if [ -f rkspi_loader.img ]; then
-        cp rkspi_loader.img ${OUT_PAYLOAD}
-        echo "  (using stock rkspi_loader.img as prefix)"
-    elif [ -f compare/rkspi_loader.img ]; then
-        cp compare/rkspi_loader.img ${OUT_PAYLOAD}
-        echo "  (using compare/rkspi_loader.img as prefix)"
-    elif [ -f ${OUT_FULL} ]; then
-        cp ${OUT_FULL} ${OUT_PAYLOAD}
-        echo "  (using newly-built ${OUT_FULL} as prefix)"
-    else
-        echo "ERROR: no source for prefix; please build full loader first" >&2
-        exit 1
-    fi
+    echo "generating ${OUT_PAYLOAD} with signed prefix (embedded)"
+    # ignore any on-disk loader; write base64 blob directly
+    write_prefix ${OUT_PAYLOAD}
     if [ -f u-boot-dtb.img ]; then
         dd if=u-boot-dtb.img of=${OUT_PAYLOAD} bs=1 seek=$((4*1024*1024)) conv=notrunc
         echo "built ${OUT_PAYLOAD} size=$(stat -c%s ${OUT_PAYLOAD})"
