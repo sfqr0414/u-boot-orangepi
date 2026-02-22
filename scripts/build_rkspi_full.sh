@@ -35,7 +35,7 @@ PREFIX
 
 OUT_FULL=custom_loader.img
 OUT_TEST=test.img
-OUT_PAYLOAD=payload_only.img
+#OUT_PAYLOAD=payload_only.img
 
 export ARCH=arm64
 export CROSS_COMPILE=aarch64-linux-gnu-
